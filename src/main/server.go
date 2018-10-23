@@ -15,7 +15,11 @@ import (
 
 const (
 	STATIC_PATH              = "/static/"
-	SEND_CHANNEL_BUFFER_SIZE = 16
+	SEND_CHANNEL_BUFFER_SIZE = 256
+	SOCKET_READ_BUFFER_SIZE  = 1024
+	SOCKET_WRITE_BUFFER_SIZE = 1024
+	WRITE_TIMEOUT            = 15
+	READ_TIMEOUT             = 15
 )
 
 // Global buffer.
@@ -23,6 +27,7 @@ var buffer Buffer
 
 // Register of websockets.
 type socketRegister struct {
+	// Map used as a set.
 	sockets map[*websocket.Conn]bool
 	mutex   sync.Mutex
 }
@@ -54,8 +59,8 @@ func HomeHandler(w http.ResponseWriter, r *http.Request) {
 
 // Upgrader for websocket end-point.
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	ReadBufferSize:  SOCKET_READ_BUFFER_SIZE,
+	WriteBufferSize: SOCKET_WRITE_BUFFER_SIZE,
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
@@ -74,7 +79,7 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("We now have %v clients connected.", len(websockets.sockets))
 
 	// Initialize channel for sending events back the clients.
-	sendChannel := make(chan []byte, 16)
+	sendChannel := make(chan []byte, SEND_CHANNEL_BUFFER_SIZE)
 	go SendHandler(sendChannel)
 
 	// Initial data for buffer.
@@ -101,6 +106,7 @@ func init() {
 		}
 	}
 
+	// Maps need to be initialized properly.
 	websockets.sockets = make(map[*websocket.Conn]bool)
 }
 
@@ -115,8 +121,8 @@ func main() {
 	server := http.Server{
 		Handler:      r,
 		Addr:         "0.0.0.0:9000",
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
+		WriteTimeout: WRITE_TIMEOUT * time.Second,
+		ReadTimeout:  READ_TIMEOUT * time.Second,
 	}
 	http2.ConfigureServer(&server, &http2.Server{})
 	fmt.Println("Starting server at", server.Addr)
