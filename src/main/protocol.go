@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/gorilla/websocket"
 	"log"
 )
@@ -14,9 +15,12 @@ func HandleMessage(channel chan []byte, msg []byte) {
 	buffer.mutex.Lock()
 	defer buffer.mutex.Unlock()
 
+	fmt.Println(msg)
+
 	switch msg[0] {
 	case KeyPress:
-		buffer.PutChar(Character{charIndex(rune(msg[1])), 1, 0, false}, msg[2], msg[3])
+		buffer.PutChar(Character{charIndex(rune(msg[1])),
+			msg[4], msg[5], false}, msg[2], msg[3])
 	}
 
 	channel <- buffer.BufferMsg()
