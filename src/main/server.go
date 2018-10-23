@@ -1,66 +1,26 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"golang.org/x/net/http2"
 	"io/ioutil"
 	"log"
-	"math/big"
-	"net"
 	"net/http"
 	"os"
 	"time"
 )
 
 const (
-	STATIC_PATH = "/static/"
+	STATIC_PATH              = "/static/"
+	SEND_CHANNEL_BUFFER_SIZE = 16
 )
 
+// Global buffer.
 var buffer Buffer
 
-type KeyMsg struct {
-	Msg string `json:"msg"`
-	Key string `json:"key"`
-}
-
-func generateCertificate() {
-	max := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, _ := rand.Int(rand.Reader, max)
-	subject := pkix.Name{
-		Organization:       []string{"Combine Control Systems AB"},
-		OrganizationalUnit: []string{"Internal"},
-		CommonName:         "Back Office",
-	}
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject:      subject,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-	}
-
-	pk, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	derBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &pk.PublicKey, pk)
-	certOut, _ := os.Create("cert.pem")
-	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	certOut.Close()
-
-	keyOut, _ := os.Create("key.pem")
-	pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(pk)})
-	keyOut.Close()
-}
-
+// Handler for root path.
 func HomeHandler(w http.ResponseWriter, r *http.Request) {
 
 	index, err := ioutil.ReadFile("client/index.html")
@@ -71,6 +31,7 @@ func HomeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(index)
 }
 
+// Upgrader for websocket end-point.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -79,45 +40,57 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// Handler for websocket.
 func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
+
+	// Initialize channel for sending events back the clients.
+	sendChannel := make(chan []byte, 16)
+	go SendHandler(sendChannel, conn)
+
+	// Initial data for buffer.
+	buffer.mutex.Lock()
+	sendChannel <- buffer.BufferMsg()
+	buffer.mutex.Unlock()
+
 	for {
 		messageType, msg, err := conn.ReadMessage()
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+
 		switch messageType {
 		case websocket.BinaryMessage:
-			log.Println("Got a binary message.")
+			go HandleMessage(sendChannel, msg)
 		case websocket.TextMessage:
-			log.Println("Got a text message.")
-		}
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		var keyMsg KeyMsg
-		err = json.Unmarshal(msg, &keyMsg)
-		if err != nil {
-			fmt.Println(err)
-		}
-
-		buffer.PutCharAtCursor(Character{keyMsg.Key, 1, 0})
-
-		var bytes = buffer.Encode()
-		if err := conn.WriteMessage(websocket.TextMessage, bytes); err != nil {
-			log.Println(err)
-			return
+			log.Println("Received unexpected Text Message.")
 		}
 	}
 }
 
+// Initialize the font if needed.
 func init() {
-	GenerateFont()
+	if _, err := os.Stat("./client/font.png"); os.IsNotExist(err) {
+		log.Println("Generating font.")
+		GenerateFont()
+	}
+
+	for row := 0; row < HEIGHT; row++ {
+		for col := 0; col < WIDTH; col++ {
+			buffer.chars[row][col].Char = 32
+			buffer.chars[row][col].Foreground = 1
+			buffer.chars[row][col].Background = 0
+			buffer.chars[row][col].Reverse = false
+		}
+	}
 }
 
+// Main entry point.
 func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/", HomeHandler)
@@ -133,5 +106,7 @@ func main() {
 	}
 	http2.ConfigureServer(&server, &http2.Server{})
 	fmt.Println("Starting server at", server.Addr)
-	server.ListenAndServe()
+	if err := server.ListenAndServe(); err != nil {
+		log.Println(err)
+	}
 }

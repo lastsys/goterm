@@ -11,103 +11,12 @@ function main() {
             for (let i = 0; i < HEIGHT; i++) {
                 a[i] = new Array(WIDTH);
                 for (let j = 0; j < WIDTH; j++) {
-                    a[i][j] = {char: ' ', bg: 0, fg: 1}
+                    a[i][j] = {char: 32, bg: 0, fg: 1, r: false}
                 }
             }
             return a;
         })(),
         cursorPosition: {row: 0, col: 0},
-        charIndex: {
-            '@': 0,
-            'A': 1,
-            'B': 2,
-            'C': 3,
-            'D': 4,
-            'E': 5,
-            'F': 6,
-            'G': 7,
-            'H': 8,
-            'I': 9,
-            'J': 10,
-            'K': 11,
-            'L': 12,
-            'M': 13,
-            'N': 14,
-            'O': 15,
-            'P': 16,
-            'Q': 17,
-            'R': 18,
-            'S': 19,
-            'T': 20,
-            'U': 21,
-            'V': 22,
-            'W': 23,
-            'X': 24,
-            'Y': 25,
-            'Z': 26,
-            '[': 27,
-            '£': 28,
-            ']': 29,
-            ' ': 32,
-            '' : 32,
-            '!': 33,
-            '"': 34,
-            '#': 35,
-            '$': 36,
-            '%': 37,
-            '&': 38,
-            "'": 39,
-            '(': 40,
-            ')': 41,
-            '*': 42,
-            '+': 43,
-            ',': 44,
-            '-': 45,
-            '.': 46,
-            '/': 47,
-            '0': 48,
-            '1': 49,
-            '2': 50,
-            '3': 51,
-            '4': 52,
-            '5': 53,
-            '6': 54,
-            '7': 55,
-            '8': 56,
-            '9': 57,
-            ':': 58,
-            ';': 59,
-            '<': 60,
-            '=': 61,
-            '>': 62,
-            '?': 63,
-            'a': 129,
-            'b': 130,
-            'c': 131,
-            'd': 132,
-            'e': 133,
-            'f': 134,
-            'g': 135,
-            'h': 136,
-            'i': 137,
-            'j': 138,
-            'k': 139,
-            'l': 140,
-            'm': 141,
-            'n': 142,
-            'o': 143,
-            'p': 144,
-            'q': 145,
-            'r': 146,
-            's': 147,
-            't': 148,
-            'u': 149,
-            'v': 150,
-            'w': 151,
-            'x': 152,
-            'y': 153,
-            'z': 154
-        }
     };
 
     initializeCanvas(canvas);
@@ -155,15 +64,60 @@ function flp2(x) {
 
 function initializeWebSocket(canvas) {
     let socket = new WebSocket('ws://localhost:9000/ws');
+    socket.binaryType = 'arraybuffer';
 
     socket.onopen = function(event) {
-        socket.send('Client is alive!');
         let body = document.getElementById('body');
-        body.addEventListener('keypress', function(event) {
-            socket.send(JSON.stringify({
-                msg: 'key',
-                key: event.key
-            }));
+        body.addEventListener('keydown', function(event) {
+            console.log(event);
+            switch(event.key) {
+                case "Enter":
+                    canvas.cursorPosition.col = 0;
+                    canvas.cursorPosition.row++;
+                    break;
+                case "ArrowUp":
+                    canvas.cursorPosition.row--;
+                    break;
+                case "ArrowDown":
+                    canvas.cursorPosition.row++;
+                    break;
+                case "ArrowLeft":
+                    canvas.cursorPosition.col--;
+                    break;
+                case "ArrowRight":
+                    canvas.cursorPosition.col++;
+                    break;
+                default:
+                    if (event.key.length === 1) {
+                        let msg = new Uint8Array(4);
+                        msg[0] = 0x10; // KeyPress
+                        msg[1] = event.key.charCodeAt(0);
+                        msg[2] = canvas.cursorPosition.row;
+                        msg[3] = canvas.cursorPosition.col;
+                        socket.send(msg.buffer);
+                        canvas.cursorPosition.col++;
+                    }
+            }
+
+            if (canvas.cursorPosition.col < 0) {
+                canvas.cursorPosition.col = WIDTH-1;
+                canvas.cursorPosition.row--;
+            }
+
+            if (canvas.cursorPosition.row < 0) {
+                canvas.cursorPosition.row = 0;
+            }
+
+            if (canvas.cursorPosition.col >= WIDTH) {
+                canvas.cursorPosition.col = 0;
+                canvas.cursorPosition.row++;
+            }
+
+            if (canvas.cursorPosition.row >= HEIGHT) {
+                canvas.cursorPosition.row = HEIGHT-1;
+            }
+
+            renderBuffer(canvas);
         });
     };
 
@@ -177,11 +131,23 @@ function initializeWebSocket(canvas) {
     };
 
     socket.onmessage = function(event) {
-        console.log('Got message!');
-        let data = JSON.parse(event.data);
-        canvas.buffer = data.chars;
-        canvas.cursorPosition = data.cursorPosition;
-        renderBuffer(canvas);
+        let data = new Uint8Array(event.data);
+
+        switch(data[0]) {
+            case 0x01:
+                let row, col, i = 1;
+                for (row = 0; row < HEIGHT; ++row) {
+                    for (col = 0; col < WIDTH; ++col) {
+                        canvas.buffer[row][col].char = data[i];
+                        canvas.buffer[row][col].fg = data[i+1];
+                        canvas.buffer[row][col].bg = data[i+2];
+                        canvas.buffer[row][col].r = data[i+3];
+                        i += 4;
+                    }
+                }
+                renderBuffer(canvas);
+                break;
+        }
     };
 }
 
@@ -193,8 +159,28 @@ function renderBuffer(canvas) {
         for (let col = 0; col < WIDTH; col++) {
             pos = canvas.buffer[row][col];
             if (col === canvas.cursorPosition.col && row === canvas.cursorPosition.row) {
-                putChar(' ', col, row, 1, 1, canvas, ctx);
+                let fg, bg;
+                if (canvas.r) {
+                    fg = pos.bg;
+                    bg = pos.fg;
+                } else {
+                    fg = pos.fg;
+                    bg = pos.bg;
+                }
+                if (fg === bg) {
+                    fg = 1;
+                    bg = 0;
+                }
+                putChar(pos.char, col, row, bg, fg, canvas, ctx);
             } else {
+                let fg, bg;
+                if (canvas.r) {
+                    fg = pos.bg;
+                    bg = pos.fg;
+                } else {
+                    fg = pos.fg;
+                    bg = pos.bg;
+                }
                 putChar(pos.char, col, row, pos.fg, pos.bg, canvas, ctx);
             }
         }
@@ -203,7 +189,7 @@ function renderBuffer(canvas) {
 
 function putChar(char, cx, cy, fg, bg, canvas, ctx) {
     let y = (bg + fg * 16) * 8;
-    let x = canvas.charIndex[char] * 8;
+    let x = char * 8;
     ctx.drawImage(canvas.font,
         x, y, 8, 8,
         cx * 8 * canvas.scalingFactor, cy * 8 * canvas.scalingFactor,
