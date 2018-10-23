@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/gorilla/websocket"
+	"log"
 )
 
 const (
@@ -21,9 +22,34 @@ func HandleMessage(channel chan []byte, msg []byte) {
 	channel <- buffer.BufferMsg()
 }
 
-func SendHandler(channel chan []byte, conn *websocket.Conn) {
+func SendHandler(channel chan []byte) {
 	for {
 		bytes := <-channel
-		conn.WriteMessage(websocket.BinaryMessage, bytes)
+
+		// Dispatch to all connected clients.
+		websockets.mutex.Lock()
+		for conn := range websockets.sockets {
+			conn.WriteMessage(websocket.BinaryMessage, bytes)
+		}
+		websockets.mutex.Unlock()
+	}
+}
+
+func ReadHandler(sendChannel chan []byte, conn *websocket.Conn) {
+	for {
+		messageType, msg, err := conn.ReadMessage()
+		if err != nil {
+			log.Println(err)
+			websockets.Unregister(conn)
+			log.Printf("We now have %v clients connected.", len(websockets.sockets))
+			return
+		}
+
+		switch messageType {
+		case websocket.BinaryMessage:
+			go HandleMessage(sendChannel, msg)
+		case websocket.TextMessage:
+			log.Println("Received unexpected Text Message.")
+		}
 	}
 }

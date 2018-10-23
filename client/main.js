@@ -22,6 +22,9 @@ function main() {
     initializeCanvas(canvas);
     resizeCanvas(canvas);
     initializeWebSocket(canvas);
+    setTimeout(function() {
+        renderBuffer(canvas);
+    }, 0);
 }
 
 function loadFont() {
@@ -62,18 +65,50 @@ function flp2(x) {
     return x - (x >> 1);
 }
 
+function wrapCursor(canvas) {
+    if (canvas.cursorPosition.col < 0) {
+        canvas.cursorPosition.col = WIDTH-1;
+        canvas.cursorPosition.row--;
+    }
+
+    if (canvas.cursorPosition.row < 0) {
+        canvas.cursorPosition.row = 0;
+    }
+
+    if (canvas.cursorPosition.col >= WIDTH) {
+        canvas.cursorPosition.col = 0;
+        canvas.cursorPosition.row++;
+    }
+
+    if (canvas.cursorPosition.row >= HEIGHT) {
+        canvas.cursorPosition.row = HEIGHT-1;
+    }
+}
+
 function initializeWebSocket(canvas) {
-    let socket = new WebSocket('ws://localhost:9000/ws');
+    let origin = location.origin.substring(7);
+    let socket = new WebSocket('ws://' + origin + '/ws');
     socket.binaryType = 'arraybuffer';
 
     socket.onopen = function(event) {
         let body = document.getElementById('body');
         body.addEventListener('keydown', function(event) {
             console.log(event);
+
             switch(event.key) {
                 case "Enter":
                     canvas.cursorPosition.col = 0;
                     canvas.cursorPosition.row++;
+                    break;
+                case "Backspace":
+                    canvas.cursorPosition.col--;
+                    wrapCursor(canvas);
+                    let msg = new Uint8Array(4);
+                    msg[0] = 0x10; // KeyPress
+                    msg[1] = 32;
+                    msg[2] = canvas.cursorPosition.row;
+                    msg[3] = canvas.cursorPosition.col;
+                    socket.send(msg.buffer);
                     break;
                 case "ArrowUp":
                     canvas.cursorPosition.row--;
@@ -98,25 +133,7 @@ function initializeWebSocket(canvas) {
                         canvas.cursorPosition.col++;
                     }
             }
-
-            if (canvas.cursorPosition.col < 0) {
-                canvas.cursorPosition.col = WIDTH-1;
-                canvas.cursorPosition.row--;
-            }
-
-            if (canvas.cursorPosition.row < 0) {
-                canvas.cursorPosition.row = 0;
-            }
-
-            if (canvas.cursorPosition.col >= WIDTH) {
-                canvas.cursorPosition.col = 0;
-                canvas.cursorPosition.row++;
-            }
-
-            if (canvas.cursorPosition.row >= HEIGHT) {
-                canvas.cursorPosition.row = HEIGHT-1;
-            }
-
+            wrapCursor(canvas);
             renderBuffer(canvas);
         });
     };

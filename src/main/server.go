@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,26 @@ const (
 
 // Global buffer.
 var buffer Buffer
+
+// Register of websockets.
+type socketRegister struct {
+	sockets map[*websocket.Conn]bool
+	mutex   sync.Mutex
+}
+
+var websockets socketRegister
+
+func (s *socketRegister) Register(conn *websocket.Conn) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.sockets[conn] = true
+}
+
+func (s *socketRegister) Unregister(conn *websocket.Conn) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	delete(s.sockets, conn)
+}
 
 // Handler for root path.
 func HomeHandler(w http.ResponseWriter, r *http.Request) {
@@ -48,29 +69,20 @@ func WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Println("Registering connection.")
+	websockets.Register(conn)
+	log.Printf("We now have %v clients connected.", len(websockets.sockets))
+
 	// Initialize channel for sending events back the clients.
 	sendChannel := make(chan []byte, 16)
-	go SendHandler(sendChannel, conn)
+	go SendHandler(sendChannel)
 
 	// Initial data for buffer.
 	buffer.mutex.Lock()
 	sendChannel <- buffer.BufferMsg()
 	buffer.mutex.Unlock()
 
-	for {
-		messageType, msg, err := conn.ReadMessage()
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-
-		switch messageType {
-		case websocket.BinaryMessage:
-			go HandleMessage(sendChannel, msg)
-		case websocket.TextMessage:
-			log.Println("Received unexpected Text Message.")
-		}
-	}
+	go ReadHandler(sendChannel, conn)
 }
 
 // Initialize the font if needed.
@@ -88,6 +100,8 @@ func init() {
 			buffer.chars[row][col].Reverse = false
 		}
 	}
+
+	websockets.sockets = make(map[*websocket.Conn]bool)
 }
 
 // Main entry point.
@@ -100,7 +114,7 @@ func main() {
 
 	server := http.Server{
 		Handler:      r,
-		Addr:         "127.0.0.1:9000",
+		Addr:         "0.0.0.0:9000",
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
